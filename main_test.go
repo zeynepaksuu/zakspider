@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// fetch: UA, cookie ve ek header'lari gercekten gonderiyor mu?
-// httptest ile sahte bir sunucu kurup aldigi header'lari kontrol ediyoruz.
 func TestFetchHeaders(t *testing.T) {
 	var gelen http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +51,6 @@ func TestFetchHeaders(t *testing.T) {
 	}
 }
 
-// crawl: tam bir kucuk siteyi gezip dogru Report donduruyor mu? (entegrasyon)
 func TestCrawlIntegration(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +89,6 @@ func TestCrawlIntegration(t *testing.T) {
 	}
 }
 
-// fetch: 503 sonrasi retry yapip sonunda basariyi yakaliyor mu?
 func TestFetchRetry(t *testing.T) {
 	var mu sync.Mutex
 	n := 0
@@ -101,7 +97,7 @@ func TestFetchRetry(t *testing.T) {
 		n++
 		c := n
 		mu.Unlock()
-		if c < 3 { // ilk 2 istek 503, 3. istek 200
+		if c < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -121,11 +117,10 @@ func TestFetchRetry(t *testing.T) {
 	}
 }
 
-// fetch: dev govde maxBodyBytes'ta kesiliyor mu?
 func TestBodySizeLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write(make([]byte, maxBodyBytes+5000)) // limitten buyuk
+		_, _ = w.Write(make([]byte, maxBodyBytes+5000))
 	}))
 	defer srv.Close()
 
@@ -140,16 +135,14 @@ func TestBodySizeLimit(t *testing.T) {
 	}
 }
 
-// crawl: iptal edilmis context ile erken durup yine de rapor donduruyor mu?
 func TestCrawlGracefulShutdown(t *testing.T) {
-	// Her sayfa yeni linkler ureten "sonsuz" bir site.
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a></html>`))
 	}))
 	defer srv.Close()
 
-	// Hemen iptal edilen context.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -157,19 +150,17 @@ func TestCrawlGracefulShutdown(t *testing.T) {
 	client, _ := newClient(cfg)
 	rm := newRateManager(0, false)
 
-	// crawl asilmadan (deadlock olmadan) donmeli ve rapor uretmeli.
 	rep := crawl(ctx, client, rm, srv.URL, cfg, nil)
 	if rep == nil {
 		t.Fatal("iptal sonrasi bile rapor donmeliydi")
 	}
-	// max-pages 100000 olmasina ragmen iptal yuzunden cok az sayfa gezilmeli.
+
 	if rep.PagesCrawled > 50 {
 		t.Errorf("iptal edildi ama %d sayfa gezildi (erken durmaliydi)", rep.PagesCrawled)
 	}
 }
 
-// benchSunucu: birbirine link veren ~20 sayfalik sahte site.
-func benchSunucu() *httptest.Server {
+func benchServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		var sb strings.Builder
@@ -182,14 +173,12 @@ func benchSunucu() *httptest.Server {
 	}))
 }
 
-// BenchmarkCrawl1 / Benchmark8 / Benchmark16: worker sayisi vs hiz.
-// Calistir: go test -bench=Crawl -benchmem
 func BenchmarkCrawl1(b *testing.B)  { benchCrawl(b, 1) }
 func BenchmarkCrawl8(b *testing.B)  { benchCrawl(b, 8) }
 func BenchmarkCrawl16(b *testing.B) { benchCrawl(b, 16) }
 
 func benchCrawl(b *testing.B, workers int) {
-	srv := benchSunucu()
+	srv := benchServer()
 	defer srv.Close()
 	cfg := &Config{ScopeMode: "strict", MaxPages: 100, Workers: workers, Output: "json", Quiet: true}
 	client, _ := newClient(cfg)
@@ -201,11 +190,10 @@ func benchCrawl(b *testing.B, workers int) {
 	}
 }
 
-// bruteForce: wordlist'teki gizli yolu bulup 404'leri eliyor mu?
 func TestBruteForce(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// ServeMux'ta "/" catch-all'dur; gercek 404 icin sadece kok'e 200 don.
+
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
@@ -217,9 +205,9 @@ func TestBruteForce(t *testing.T) {
 		w.WriteHeader(200)
 	})
 	mux.HandleFunc("/secret", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(403) // var ama yasak -> yine de ilginc
+		w.WriteHeader(403)
 	})
-	// diger her sey 404
+
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -246,7 +234,6 @@ func TestBruteForce(t *testing.T) {
 	}
 }
 
-// parseRobots: Disallow ve Sitemap satirlarini dogru cikariyor mu?
 func TestParseRobots(t *testing.T) {
 	body := `# yorum
 User-agent: *
@@ -272,7 +259,7 @@ Sitemap: https://x.com/sitemap.xml`
 	if !aset["/public"] {
 		t.Errorf("beklenen allow yolu eksik: %v", allow)
 	}
-	// Wildcard'li girdi: ham "/tmp/*" degil, prefix "/tmp/" cikarilmali (HTB dizin ipucu).
+
 	if dset["/tmp/*"] {
 		t.Errorf("ham wildcard yol saklanmamaliydi")
 	}
@@ -284,19 +271,18 @@ Sitemap: https://x.com/sitemap.xml`
 	}
 }
 
-// crawl: robots.txt Disallow'daki linklenmemis yolu gerceklestirebiliyor mu? (entegrasyon)
 func TestRobotsDiscovery(t *testing.T) {
 	mux := http.NewServeMux()
-	// Ana sayfada HICBIR link yok -> normal crawl gizli yolu bulamaz.
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html>bos sayfa, link yok</html>"))
 	})
-	// robots.txt gizli yolu ifsa ediyor.
+
 	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("User-agent: *\nDisallow: /gizli-panel/\n"))
 	})
-	// Gizli panel gercekten var.
+
 	mux.HandleFunc("/gizli-panel/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html>SECRET ADMIN</html>"))
@@ -309,7 +295,6 @@ func TestRobotsDiscovery(t *testing.T) {
 	rm := newRateManager(0, false)
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
-	// robots sayesinde gizli panel gezilmis olmali.
 	bulundu := false
 	for _, p := range rep.Pages {
 		if strings.Contains(p.URL, "/gizli-panel/") {
@@ -319,7 +304,7 @@ func TestRobotsDiscovery(t *testing.T) {
 	if !bulundu {
 		t.Errorf("robots.txt'deki /gizli-panel/ gezilmeliydi. Gezilen: %d sayfa", rep.PagesCrawled)
 	}
-	// Ve "ilginc" olarak isaretlenmis olmali.
+
 	robotsHint := false
 	for _, sebep := range rep.Interesting {
 		if sebep == "robots-disallow" {
@@ -331,19 +316,18 @@ func TestRobotsDiscovery(t *testing.T) {
 	}
 }
 
-// allowedPath: include/exclude filtreleri dogru calisiyor mu?
 func TestAllowedPath(t *testing.T) {
 	testler := []struct {
 		include, exclude, url string
 		beklenen              bool
 	}{
-		{"", "", "https://x.com/anything", true},                         // filtre yok -> her sey
-		{"/api/", "", "https://x.com/api/users", true},                   // include eslesti
-		{"/api/", "", "https://x.com/about", false},                      // include eslesmedi
-		{"", "/logout", "https://x.com/logout", false},                   // exclude eslesti
-		{"", "/logout", "https://x.com/dashboard", true},                 // exclude eslesmedi
-		{"/admin", "/admin/delete", "https://x.com/admin/x", true},       // include var, exclude yok
-		{"/admin", "/admin/delete", "https://x.com/admin/delete", false}, // exclude oncelikli
+		{"", "", "https://x.com/anything", true},
+		{"/api/", "", "https://x.com/api/users", true},
+		{"/api/", "", "https://x.com/about", false},
+		{"", "/logout", "https://x.com/logout", false},
+		{"", "/logout", "https://x.com/dashboard", true},
+		{"/admin", "/admin/delete", "https://x.com/admin/x", true},
+		{"/admin", "/admin/delete", "https://x.com/admin/delete", false},
 	}
 	for _, tc := range testler {
 		cfg := &Config{Include: tc.include, Exclude: tc.exclude}
@@ -354,16 +338,15 @@ func TestAllowedPath(t *testing.T) {
 	}
 }
 
-// inScope: strict vs subdomain modu + scope bypass korumasi.
 func TestInScope(t *testing.T) {
 	testler := []struct {
 		base, url, mode string
 		beklenen        bool
 	}{
 		{"go.dev", "https://go.dev/x", "strict", true},
-		{"go.dev", "https://pkg.go.dev/x", "strict", false},    // alt alan strict'te disarida
-		{"go.dev", "https://pkg.go.dev/x", "subdomain", true},  // alt alan subdomain'de iceride
-		{"go.dev", "https://evilgo.dev/x", "subdomain", false}, // BYPASS korumasi: evilgo.dev != *.go.dev
+		{"go.dev", "https://pkg.go.dev/x", "strict", false},
+		{"go.dev", "https://pkg.go.dev/x", "subdomain", true},
+		{"go.dev", "https://evilgo.dev/x", "subdomain", false},
 		{"go.dev", "https://go.dev.attacker.com", "subdomain", false},
 	}
 	for _, tc := range testler {

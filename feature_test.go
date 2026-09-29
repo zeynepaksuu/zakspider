@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// Alt dizindeki goreli link, sayfanin kendi URL'ine gore cozulmeli (regresyon).
-// '/docs/' icindeki <a href="chapter2.html"> -> '/docs/chapter2.html' (seed'e gore DEGIL).
 func TestRelativeLinkBase(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +52,6 @@ func TestRelativeLinkBase(t *testing.T) {
 	}
 }
 
-// In-scope yonlendirme izlenip kaydedilmeli; scope disi yonlendirme IZLENMEMELI.
 func TestRedirectScope(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -62,14 +59,14 @@ func TestRedirectScope(t *testing.T) {
 		_, _ = w.Write([]byte(`<html><a href="/eski">eski</a><a href="/disari">disari</a></html>`))
 	})
 	mux.HandleFunc("/eski", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/yeni", http.StatusFound) // in-scope
+		http.Redirect(w, r, "/yeni", http.StatusFound)
 	})
 	mux.HandleFunc("/yeni", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html>YENI</html>`))
 	})
 	mux.HandleFunc("/disari", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://external.invalid/gizli", http.StatusFound) // scope disi
+		http.Redirect(w, r, "http://external.invalid/gizli", http.StatusFound)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -79,24 +76,22 @@ func TestRedirectScope(t *testing.T) {
 	rm := newRateManager(0, false)
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
-	// In-scope yonlendirme kaydedilmis olmali.
 	if _, ok := rep.Redirects[srv.URL+"/eski"]; !ok {
 		t.Errorf("/eski -> /yeni yonlendirmesi kaydedilmeliydi: %v", rep.Redirects)
 	}
-	// Scope disi host HICBIR sekilde gezilmemis olmali.
+
 	for _, p := range rep.Pages {
 		if strings.Contains(p.URL, "external.invalid") {
 			t.Errorf("scope disi host gezildi: %s", p.URL)
 		}
 	}
-	// Scope disi yonlendirmenin hedefi yine de raporlanmali (bilgi amacli).
+
 	hedef, ok := rep.Redirects[srv.URL+"/disari"]
 	if !ok || !strings.Contains(hedef, "external.invalid") {
 		t.Errorf("/disari icin scope disi hedef kaydedilmeliydi: %v", rep.Redirects)
 	}
 }
 
-// Content-Type octet-stream olsa bile HTML sniff edilip linkler cikarilmali.
 func TestContentTypeSniffing(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +125,6 @@ func TestContentTypeSniffing(t *testing.T) {
 	}
 }
 
-// robots Allow ve Disallow ayri etiketlenmeli.
 func TestRobotsAllowDisallowLabels(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +161,6 @@ func TestRobotsAllowDisallowLabels(t *testing.T) {
 	}
 }
 
-// Uzanti destegi: -x bak ile 'config' kelimesi 'config.bak'i da denemeli.
 func TestBruteExtensions(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +192,6 @@ func TestBruteExtensions(t *testing.T) {
 	}
 }
 
-// Recursive brute: /admin (dizin) bulununca icindeki /admin/secret de bulunmali.
 func TestBruteRecursive(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +225,6 @@ func TestBruteRecursive(t *testing.T) {
 	}
 }
 
-// Secret cikarma: JWT, AWS key ve generic api_key yakalanmali.
 func TestExtractSecrets(t *testing.T) {
 	body := []byte(`
 		const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456";
@@ -252,7 +243,6 @@ func TestExtractSecrets(t *testing.T) {
 	}
 }
 
-// Govde dedup: ayni icerik farkli URL'lerde -> duplicates'e dusmeli.
 func TestBodyDedup(t *testing.T) {
 	ayni := `<html>AYNI ICERIK</html>`
 	mux := http.NewServeMux()
@@ -280,7 +270,6 @@ func TestBodyDedup(t *testing.T) {
 	}
 }
 
-// Derinlik limiti: --depth 1 -> seed + dogrudan linkler; 2. seviye gezilmemeli.
 func TestDepthLimit(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +298,7 @@ func TestDepthLimit(t *testing.T) {
 			t.Errorf("depth=1 iken /seviye2 (derinlik 2) gezilmemeliydi")
 		}
 	}
-	// seviye1 (derinlik 1) gezilmis olmali.
+
 	var s1 bool
 	for _, p := range rep.Pages {
 		if strings.HasSuffix(p.URL, "/seviye1") {
@@ -321,14 +310,13 @@ func TestDepthLimit(t *testing.T) {
 	}
 }
 
-// Host basina rate manager: ayni host ayni limiter, farkli host farkli limiter.
 func TestRateManagerPerHost(t *testing.T) {
-	// Global mod: her host icin ayni (global) limiter.
+
 	g := newRateManager(5, false)
 	if g.forHost("a.com") != g.forHost("b.com") {
 		t.Errorf("global modda tum host'lar ayni limiter'i paylasmali")
 	}
-	// Per-host mod: ayni host ayni, farkli host farkli.
+
 	p := newRateManager(5, true)
 	if p.forHost("a.com") != p.forHost("a.com") {
 		t.Errorf("ayni host ayni limiter'i vermeli")
@@ -338,7 +326,6 @@ func TestRateManagerPerHost(t *testing.T) {
 	}
 }
 
-// Flag cikarma birim testi: HTB{...} yakalanmali, tekillestirilmeli, digerleri elenmeli.
 func TestExtractFlags(t *testing.T) {
 	re := flagRegex("HTB")
 	body := []byte(`sayfada HTB{ilk_flag_123} var, tekrar HTB{ilk_flag_123},
@@ -354,11 +341,11 @@ func TestExtractFlags(t *testing.T) {
 	if set["FLAG{bu_olmaz}"] {
 		t.Errorf("HTB disi format alinmamaliydi: %v", got)
 	}
-	// "HTB{}" bos -> desen en az 1 karakter ister, alinmamali.
+
 	if set["HTB{}"] {
 		t.Errorf("bos flag alinmamaliydi")
 	}
-	// Tekillestirme: "HTB{ilk_flag_123}" yalnizca bir kez.
+
 	say := 0
 	for _, f := range got {
 		if f == "HTB{ilk_flag_123}" {
@@ -369,13 +356,11 @@ func TestExtractFlags(t *testing.T) {
 		t.Errorf("tekrar eden flag tekillestirilmeliydi, adet: %d", say)
 	}
 
-	// Bos format kapatir mi? extractFlags(nil) -> nil.
 	if extractFlags(body, nil) != nil {
 		t.Errorf("flagRe nil iken flag aranmamali")
 	}
 }
 
-// Crawl icinde flag: yorumda ve ayri sayfada gecen HTB{...} rapora dusmeli.
 func TestFlagInCrawl(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -409,8 +394,6 @@ func TestFlagInCrawl(t *testing.T) {
 	}
 }
 
-// robots.txt HEDEF olarak: Disallow yollari (wildcard dahil) gezilmeli ve
-// rapora status'lariyla dusmeli. Ana sayfada bu yollara HIC link yok.
 func TestRobotsAsTargets(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +406,7 @@ func TestRobotsAsTargets(t *testing.T) {
 	})
 	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		// Wildcard'li dizin + normal yol.
+
 		_, _ = w.Write([]byte("User-agent: *\nDisallow: /admin/*\nDisallow: /secret-backup\n"))
 	})
 	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
@@ -442,7 +425,7 @@ func TestRobotsAsTargets(t *testing.T) {
 	if rep.Robots == nil || !rep.Robots.Found {
 		t.Fatalf("robots.txt bulunup raporlanmaliydi")
 	}
-	// robots yollari status'lariyla raporlanmali.
+
 	durum := map[string]int{}
 	for _, p := range rep.Robots.Paths {
 		durum[p.Path] = p.Status
@@ -453,7 +436,7 @@ func TestRobotsAsTargets(t *testing.T) {
 	if durum[srv.URL+"/secret-backup"] != 403 {
 		t.Errorf("/secret-backup robots'tan hedef alinip 403 raporlanmaliydi: %+v", rep.Robots.Paths)
 	}
-	// Ve gercekten gezilen sayfalar arasinda olmalilar.
+
 	var adminGezildi bool
 	for _, p := range rep.Pages {
 		if strings.HasSuffix(p.URL, "/admin/") {
@@ -465,7 +448,6 @@ func TestRobotsAsTargets(t *testing.T) {
 	}
 }
 
-// normalize: derin base'e gore goreli cozum (birim testi).
 func TestNormalizeDeepBase(t *testing.T) {
 	base, _ := url.Parse("https://t.com/docs/guide/")
 	got, ok := normalize(base, "chapter2.html")
