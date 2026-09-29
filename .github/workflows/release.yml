@@ -1,0 +1,56 @@
+name: Release
+
+# Bir "v" ile baslayan tag push edildiginde calisir (orn: v0.1.0, v1.2.3).
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Release olusturmak/dosya yuklemek icin yazma izni gerekir.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # 1) Repoyu Actions sunucusuna cek.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Go'yu kur (surumu go.mod'dan okur, tutarli olsun diye).
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # 3) Yayinlamadan once testler gecmeli. Gecmezse release olusmaz.
+      - name: Run tests
+        run: go test ./...
+
+      # 4) 5 platform icin binary derle (dist/ altina).
+      #    -trimpath + "-s -w": daha kucuk, temiz binary.
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          platforms=(
+            "windows/amd64/zakspider_windows_amd64.exe"
+            "linux/amd64/zakspider_linux_amd64"
+            "linux/arm64/zakspider_linux_arm64"
+            "darwin/amd64/zakspider_darwin_amd64"
+            "darwin/arm64/zakspider_darwin_arm64"
+          )
+          for p in "${platforms[@]}"; do
+            IFS='/' read -r goos goarch out <<< "$p"
+            echo "Building $goos/$goarch -> $out"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-s -w" -o "dist/$out" .
+          done
+          ls -lh dist
+
+      # 5) Release'i olustur ve 5 binary'yi ekle.
+      #    Release notlari commit'lerden otomatik uretilir.
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
