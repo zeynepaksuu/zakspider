@@ -1,5 +1,7 @@
 # zakspider
 
+This project made by zaksu.
+
 A concurrent, recon-focused web crawler written in Go, built for HackTheBox and
 authorized pentest labs.
 

@@ -135,7 +135,7 @@ func newClient(cfg *Config) (*http.Client, error) {
 	if cfg.Proxy != "" {
 		pu, err := url.Parse(cfg.Proxy)
 		if err != nil {
-			return nil, fmt.Errorf("gecersiz proxy: %w", err)
+			return nil, fmt.Errorf("invalid proxy: %w", err)
 		}
 		transport.Proxy = http.ProxyURL(pu)
 	}
@@ -150,7 +150,7 @@ func newClient(cfg *Config) (*http.Client, error) {
 
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
-				return fmt.Errorf("cok fazla redirect (>10)")
+				return fmt.Errorf("too many redirects (>10)")
 			}
 
 			if cfg.baseHost != "" && !inScope(cfg.baseHost, req.URL.String(), cfg.ScopeMode) {
@@ -221,7 +221,7 @@ func fetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *Confi
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
-			return nil, fmt.Errorf("istek olusturulamadi: %w", err)
+			return nil, fmt.Errorf("could not create request: %w", err)
 		}
 		applyHeaders(req, cfg)
 
@@ -237,7 +237,7 @@ func fetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *Confi
 				backoffWait(ctx, attempt, 0)
 				continue
 			}
-			return nil, fmt.Errorf("istek basarisiz: %w", err)
+			return nil, fmt.Errorf("request failed: %w", err)
 		}
 
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
@@ -248,7 +248,7 @@ func fetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *Confi
 				backoffWait(ctx, attempt, 0)
 				continue
 			}
-			return nil, fmt.Errorf("govde okunamadi: %w", readErr)
+			return nil, fmt.Errorf("could not read body: %w", readErr)
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
@@ -385,7 +385,7 @@ func allowedPath(cfg *Config, rawURL string) bool {
 	return true
 }
 
-type isResult struct {
+type jobResult struct {
 	url         string
 	res         *FetchResult
 	page        *PageData
@@ -395,17 +395,17 @@ type isResult struct {
 	err         error
 }
 
-func worker(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, jobs <-chan string, results chan<- isResult) {
+func worker(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, jobs <-chan string, results chan<- jobResult) {
 	for u := range jobs {
 
 		results <- processSafely(ctx, client, rm, cfg, u)
 	}
 }
 
-func processSafely(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, u string) (r isResult) {
+func processSafely(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, u string) (r jobResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			r = isResult{url: u, err: fmt.Errorf("panic: %v", rec)}
+			r = jobResult{url: u, err: fmt.Errorf("panic: %v", rec)}
 		}
 	}()
 
@@ -431,7 +431,7 @@ func processSafely(ctx context.Context, client *http.Client, rm *rateManager, cf
 
 		flags = extractFlags(res.Body, cfg.flagRe)
 	}
-	return isResult{url: u, res: res, page: page, jsEndpoints: jsEnd, secrets: secrets, flags: flags, err: err}
+	return jobResult{url: u, res: res, page: page, jsEndpoints: jsEnd, secrets: secrets, flags: flags, err: err}
 }
 
 func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed string, cfg *Config, emit func(string, any)) *Report {
@@ -464,7 +464,7 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 	}
 
 	jobs := make(chan string)
-	results := make(chan isResult)
+	results := make(chan jobResult)
 
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
@@ -477,11 +477,11 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 
 	enqueued := map[string]struct{}{seed: {}}
 	frontier := []string{seed}
-	derinlik := map[string]int{seed: 0}
-	statusSayaci := make(map[int]int)
+	depthByURL := map[string]int{seed: 0}
+	statusCount := make(map[int]int)
 	active := 0
 	pages := 0
-	baslangic := time.Now()
+	start := time.Now()
 
 	enqueue := func(norm string, parentDepth int) bool {
 		d := 1
@@ -492,27 +492,27 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 		if maxDepth > 0 && d > maxDepth {
 			return false
 		}
-		if _, varmi := enqueued[norm]; varmi {
+		if _, exists := enqueued[norm]; exists {
 			return false
 		}
 		enqueued[norm] = struct{}{}
-		derinlik[norm] = d
+		depthByURL[norm] = d
 		frontier = append(frontier, norm)
 		return true
 	}
 
-	type yorumKaydi struct{ url, yorum string }
-	type formKaydi struct {
+	type commentRecord struct{ url, comment string }
+	type formRecord struct {
 		url  string
 		form Form
 	}
-	var tumYorumlar []yorumKaydi
-	var tumFormlar []formKaydi
+	var allComments []commentRecord
+	var allForms []formRecord
 	var pageList []PageInfo
 	jsEndpointSet := make(map[string]struct{})
-	ilgincSet := make(map[string]string)
+	interestingSet := make(map[string]string)
 	notableStatus := make(map[string][]int)
-	var tumSecrets []Secret
+	var allSecrets []Secret
 	secretSeen := make(map[string]struct{})
 	var flagList []FlagFinding
 	flagSeen := make(map[string]struct{})
@@ -523,36 +523,36 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 
 	var robotsInfo *RobotsInfo
 	if !cfg.SkipRobots {
-		adaylar, ri := scanRobotsSitemap(ctx, client, rm, cfg, seedURL)
+		candidates, ri := scanRobotsSitemap(ctx, client, rm, cfg, seedURL)
 		robotsInfo = ri
 		robotsPathSeen := make(map[string]struct{})
-		eklenen := 0
-		for _, k := range adaylar {
+		added := 0
+		for _, k := range candidates {
 			norm, ok := normalize(seedURL, k.url)
 			if !ok || !inScope(baseHost, norm, scopeMode) || !allowedPath(cfg, norm) {
 				continue
 			}
 
-			if strings.HasPrefix(k.kaynak, "robots") {
-				if _, zaten := ilgincSet[norm]; !zaten {
-					ilgincSet[norm] = k.kaynak
+			if strings.HasPrefix(k.source, "robots") {
+				if _, already := interestingSet[norm]; !already {
+					interestingSet[norm] = k.source
 				}
 
-				if _, gorildi := robotsPathSeen[norm]; !gorildi {
+				if _, seen := robotsPathSeen[norm]; !seen {
 					robotsPathSeen[norm] = struct{}{}
 					robotsInfo.Paths = append(robotsInfo.Paths, RobotsPath{
-						Path: norm, Source: strings.TrimPrefix(k.kaynak, "robots-"),
+						Path: norm, Source: strings.TrimPrefix(k.source, "robots-"),
 					})
 				}
 			}
 			if enqueue(norm, -1) {
-				eklenen++
+				added++
 			}
 		}
 		if robotsInfo.Found {
 			progress("[*] robots.txt found -> %d path(s) queued as TARGETS (Disallow bypassed)\n\n", len(robotsInfo.Paths))
-		} else if eklenen > 0 {
-			progress("[*] added %d paths from sitemap to the frontier\n\n", eklenen)
+		} else if added > 0 {
+			progress("[*] added %d paths from sitemap to the frontier\n\n", added)
 		}
 	}
 
@@ -572,13 +572,13 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 		progress("[*] brute-force: %d paths found (non-404)\n\n", len(bruteFound))
 	}
 
-	iptal := false
+	cancelled := false
 	ctxDone := ctx.Done()
-	for active > 0 || (!iptal && len(frontier) > 0 && pages < maxPages) {
+	for active > 0 || (!cancelled && len(frontier) > 0 && pages < maxPages) {
 
 		var sendCh chan<- string
 		var next string
-		if !iptal && len(frontier) > 0 && pages < maxPages {
+		if !cancelled && len(frontier) > 0 && pages < maxPages {
 			next = frontier[0]
 			sendCh = jobs
 		}
@@ -586,7 +586,7 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 		select {
 		case <-ctxDone:
 
-			iptal = true
+			cancelled = true
 			ctxDone = nil
 			progress("\n[!] cancel signal received, finishing in-flight jobs (report will still be written)...\n")
 
@@ -604,7 +604,7 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 				progress("[%s] %s -> %v\n", colorRed("ERROR"), r.url, r.err)
 				continue
 			}
-			curDepth := derinlik[r.url]
+			curDepth := depthByURL[r.url]
 
 			for _, fl := range r.flags {
 				if _, ok := flagSeen[fl]; ok {
@@ -630,7 +630,7 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 				redirects[r.url] = r.res.FinalURL
 			}
 
-			statusSayaci[r.res.StatusCode]++
+			statusCount[r.res.StatusCode]++
 			statusByURL[r.url] = r.res.StatusCode
 			pi := PageInfo{
 				URL: r.url, Status: r.res.StatusCode, ContentType: r.res.ContentType,
@@ -644,10 +644,10 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 				emit("notable", map[string]any{"url": r.url, "status": r.res.StatusCode})
 			}
 
-			if sebep, ok := isInteresting(r.url); ok {
-				if _, zaten := ilgincSet[r.url]; !zaten {
-					ilgincSet[r.url] = sebep
-					emit("interesting", map[string]any{"url": r.url, "reason": sebep})
+			if reason, ok := isInteresting(r.url); ok {
+				if _, already := interestingSet[r.url]; !already {
+					interestingSet[r.url] = reason
+					emit("interesting", map[string]any{"url": r.url, "reason": reason})
 				}
 			}
 
@@ -665,15 +665,15 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 			if !isDup {
 				for _, s := range r.secrets {
 					s.URL = r.url
-					anahtar := s.Type + "|" + s.Match
-					if _, ok := secretSeen[anahtar]; ok {
+					key := s.Type + "|" + s.Match
+					if _, ok := secretSeen[key]; ok {
 						continue
 					}
-					if len(tumSecrets) >= 500 {
+					if len(allSecrets) >= 500 {
 						break
 					}
-					secretSeen[anahtar] = struct{}{}
-					tumSecrets = append(tumSecrets, s)
+					secretSeen[key] = struct{}{}
+					allSecrets = append(allSecrets, s)
 					emit("secret", s)
 				}
 			}
@@ -699,37 +699,37 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 			}
 
 			if r.page == nil {
-				etiket := "(asset)"
+				label := "(asset)"
 				if len(r.jsEndpoints) > 0 {
-					etiket = "(js)"
+					label = "(js)"
 				}
-				progress("[%s] %-7s %s\n", colorStatus(r.res.StatusCode), etiket, r.url)
+				progress("[%s] %-7s %s\n", colorStatus(r.res.StatusCode), label, r.url)
 				continue
 			}
 
 			for _, c := range r.page.Comments {
-				tumYorumlar = append(tumYorumlar, yorumKaydi{url: r.url, yorum: c})
+				allComments = append(allComments, commentRecord{url: r.url, comment: c})
 			}
 
 			for _, f := range r.page.Forms {
-				tumFormlar = append(tumFormlar, formKaydi{url: r.url, form: f})
+				allForms = append(allForms, formRecord{url: r.url, form: f})
 				emit("form", FormReport{
 					URL: r.url, Action: f.Action, Method: f.Method,
 					Inputs: f.Inputs, HasCSRF: f.HasCSRF, HasPassword: f.HasPassword,
 				})
 			}
 
-			yeni := 0
+			newCount := 0
 			for _, l := range r.page.Links {
 				norm, ok := normalize(pageBase, l.Value)
 				if !ok {
 					continue
 				}
 
-				if sebep, ilg := isInteresting(norm); ilg {
-					if _, zaten := ilgincSet[norm]; !zaten {
-						ilgincSet[norm] = sebep
-						emit("interesting", map[string]any{"url": norm, "reason": sebep})
+				if reason, hit := isInteresting(norm); hit {
+					if _, already := interestingSet[norm]; !already {
+						interestingSet[norm] = reason
+						emit("interesting", map[string]any{"url": norm, "reason": reason})
 					}
 				}
 				if !inScope(baseHost, norm, scopeMode) {
@@ -739,11 +739,11 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 					continue
 				}
 				if enqueue(norm, curDepth) {
-					yeni++
+					newCount++
 				}
 			}
 			progress("[%s] %-7s %s  (%d new, queue: %d, active: %d)\n",
-				colorStatus(r.res.StatusCode), "html", r.url, yeni, len(frontier), active)
+				colorStatus(r.res.StatusCode), "html", r.url, newCount, len(frontier), active)
 		}
 	}
 
@@ -760,17 +760,17 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 	}
 	sort.Strings(jsEndpoints)
 
-	forms := make([]FormReport, 0, len(tumFormlar))
-	for _, fk := range tumFormlar {
+	forms := make([]FormReport, 0, len(allForms))
+	for _, fRec := range allForms {
 		forms = append(forms, FormReport{
-			URL: fk.url, Action: fk.form.Action, Method: fk.form.Method,
-			Inputs: fk.form.Inputs, HasCSRF: fk.form.HasCSRF, HasPassword: fk.form.HasPassword,
+			URL: fRec.url, Action: fRec.form.Action, Method: fRec.form.Method,
+			Inputs: fRec.form.Inputs, HasCSRF: fRec.form.HasCSRF, HasPassword: fRec.form.HasPassword,
 		})
 	}
 
-	comments := make([]CommentReport, 0, len(tumYorumlar))
-	for _, yk := range tumYorumlar {
-		comments = append(comments, CommentReport{URL: yk.url, Comment: yk.yorum})
+	comments := make([]CommentReport, 0, len(allComments))
+	for _, cRec := range allComments {
+		comments = append(comments, CommentReport{URL: cRec.url, Comment: cRec.comment})
 	}
 
 	if robotsInfo != nil {
@@ -784,17 +784,17 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 		Target:         seed,
 		Scope:          scopeMode,
 		Workers:        numWorkers,
-		DurationMs:     time.Since(baslangic).Milliseconds(),
+		DurationMs:     time.Since(start).Milliseconds(),
 		PagesCrawled:   pages,
 		URLsDiscovered: len(enqueued),
-		StatusCounts:   statusSayaci,
+		StatusCounts:   statusCount,
 		Pages:          pageList,
 		NotableStatus:  notableStatus,
-		Interesting:    ilgincSet,
+		Interesting:    interestingSet,
 		JSEndpoints:    jsEndpoints,
 		Forms:          forms,
 		Comments:       comments,
-		Secrets:        tumSecrets,
+		Secrets:        allSecrets,
 		Flags:          flagList,
 		BruteFound:     bruteFound,
 		Robots:         robotsInfo,
@@ -804,7 +804,7 @@ func crawl(ctx context.Context, client *http.Client, rm *rateManager, seed strin
 
 	emit("summary", map[string]any{
 		"pages_crawled": pages, "urls_discovered": len(enqueued),
-		"duration_ms": report.DurationMs, "status_counts": statusSayaci,
+		"duration_ms": report.DurationMs, "status_counts": statusCount,
 	})
 
 	return report

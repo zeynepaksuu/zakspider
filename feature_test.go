@@ -21,11 +21,11 @@ func TestRelativeLinkBase(t *testing.T) {
 	})
 	mux.HandleFunc("/docs/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><a href="chapter2.html">bolum2</a></html>`))
+		_, _ = w.Write([]byte(`<html><a href="chapter2.html">chapter2</a></html>`))
 	})
 	mux.HandleFunc("/docs/chapter2.html", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html>DOGRU SAYFA</html>`))
+		_, _ = w.Write([]byte(`<html>CORRECT PAGE</html>`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -35,20 +35,20 @@ func TestRelativeLinkBase(t *testing.T) {
 	rm := newRateManager(0, false)
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
-	dogru, yanlis := false, false
+	correct, wrong := false, false
 	for _, p := range rep.Pages {
 		if strings.HasSuffix(p.URL, "/docs/chapter2.html") && p.Status == 200 {
-			dogru = true
+			correct = true
 		}
 		if strings.HasSuffix(p.URL, "/chapter2.html") && !strings.Contains(p.URL, "/docs/") {
-			yanlis = true
+			wrong = true
 		}
 	}
-	if !dogru {
-		t.Errorf("/docs/chapter2.html gezilmeliydi (goreli link sayfaya gore cozulmeli)")
+	if !correct {
+		t.Errorf("/docs/chapter2.html should have been crawled (relative link must resolve against the page)")
 	}
-	if yanlis {
-		t.Errorf("/chapter2.html (kok) gezilmemeliydi (goreli link yanlis base'e cozulmus)")
+	if wrong {
+		t.Errorf("/chapter2.html (root) should not have been crawled (relative link resolved against wrong base)")
 	}
 }
 
@@ -56,17 +56,17 @@ func TestRedirectScope(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><a href="/eski">eski</a><a href="/disari">disari</a></html>`))
+		_, _ = w.Write([]byte(`<html><a href="/old">old</a><a href="/outside">outside</a></html>`))
 	})
-	mux.HandleFunc("/eski", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/yeni", http.StatusFound)
+	mux.HandleFunc("/old", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/new", http.StatusFound)
 	})
-	mux.HandleFunc("/yeni", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/new", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html>YENI</html>`))
+		_, _ = w.Write([]byte(`<html>NEW</html>`))
 	})
-	mux.HandleFunc("/disari", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://external.invalid/gizli", http.StatusFound)
+	mux.HandleFunc("/outside", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://external.invalid/hidden", http.StatusFound)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -76,19 +76,19 @@ func TestRedirectScope(t *testing.T) {
 	rm := newRateManager(0, false)
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
-	if _, ok := rep.Redirects[srv.URL+"/eski"]; !ok {
-		t.Errorf("/eski -> /yeni yonlendirmesi kaydedilmeliydi: %v", rep.Redirects)
+	if _, ok := rep.Redirects[srv.URL+"/old"]; !ok {
+		t.Errorf("/old -> /new redirect should have been recorded: %v", rep.Redirects)
 	}
 
 	for _, p := range rep.Pages {
 		if strings.Contains(p.URL, "external.invalid") {
-			t.Errorf("scope disi host gezildi: %s", p.URL)
+			t.Errorf("off-scope host was crawled: %s", p.URL)
 		}
 	}
 
-	hedef, ok := rep.Redirects[srv.URL+"/disari"]
-	if !ok || !strings.Contains(hedef, "external.invalid") {
-		t.Errorf("/disari icin scope disi hedef kaydedilmeliydi: %v", rep.Redirects)
+	target, ok := rep.Redirects[srv.URL+"/outside"]
+	if !ok || !strings.Contains(target, "external.invalid") {
+		t.Errorf("off-scope target for /outside should have been recorded: %v", rep.Redirects)
 	}
 }
 
@@ -97,14 +97,14 @@ func TestContentTypeSniffing(t *testing.T) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			w.Header().Set("Content-Type", "application/octet-stream")
-			_, _ = w.Write([]byte(`<html><a href="/bulundu">link</a></html>`))
+			_, _ = w.Write([]byte(`<html><a href="/found">link</a></html>`))
 			return
 		}
 		http.NotFound(w, r)
 	})
-	mux.HandleFunc("/bulundu", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/found", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html>BULUNDU</html>`))
+		_, _ = w.Write([]byte(`<html>FOUND</html>`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -114,14 +114,14 @@ func TestContentTypeSniffing(t *testing.T) {
 	rm := newRateManager(0, false)
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
-	bulundu := false
+	found := false
 	for _, p := range rep.Pages {
-		if strings.HasSuffix(p.URL, "/bulundu") {
-			bulundu = true
+		if strings.HasSuffix(p.URL, "/found") {
+			found = true
 		}
 	}
-	if !bulundu {
-		t.Errorf("octet-stream HTML sniff edilip /bulundu gezilmeliydi")
+	if !found {
+		t.Errorf("octet-stream should have been sniffed as HTML and /found crawled")
 	}
 }
 
@@ -129,7 +129,7 @@ func TestRobotsAllowDisallowLabels(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html>bos</html>`))
+		_, _ = w.Write([]byte(`<html>empty</html>`))
 	})
 	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("User-agent: *\nDisallow: /sec/\nAllow: /pub\n"))
@@ -145,8 +145,8 @@ func TestRobotsAllowDisallowLabels(t *testing.T) {
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
 	var gotAllow, gotDisallow bool
-	for _, sebep := range rep.Interesting {
-		switch sebep {
+	for _, reason := range rep.Interesting {
+		switch reason {
 		case "robots-allow":
 			gotAllow = true
 		case "robots-disallow":
@@ -154,10 +154,10 @@ func TestRobotsAllowDisallowLabels(t *testing.T) {
 		}
 	}
 	if !gotAllow {
-		t.Errorf("robots-allow etiketi bekleniyordu: %v", rep.Interesting)
+		t.Errorf("robots-allow label was expected: %v", rep.Interesting)
 	}
 	if !gotDisallow {
-		t.Errorf("robots-disallow etiketi bekleniyordu: %v", rep.Interesting)
+		t.Errorf("robots-disallow label was expected: %v", rep.Interesting)
 	}
 }
 
@@ -181,14 +181,14 @@ func TestBruteExtensions(t *testing.T) {
 	seedURL, _ := url.Parse(srv.URL)
 
 	found := bruteForce(context.Background(), client, rm, cfg, seedURL, []string{"config"})
-	var bakBulundu bool
+	var bakFound bool
 	for _, b := range found {
 		if strings.HasSuffix(b.URL, "/config.bak") {
-			bakBulundu = true
+			bakFound = true
 		}
 	}
-	if !bakBulundu {
-		t.Errorf("config.bak uzanti ile bulunmaliydi: %v", found)
+	if !bakFound {
+		t.Errorf("config.bak should have been found via the extension: %v", found)
 	}
 }
 
@@ -218,10 +218,10 @@ func TestBruteRecursive(t *testing.T) {
 		set[b.URL] = true
 	}
 	if !set[srv.URL+"/admin"] {
-		t.Errorf("/admin bulunmaliydi: %v", found)
+		t.Errorf("/admin should have been found: %v", found)
 	}
 	if !set[srv.URL+"/admin/secret"] {
-		t.Errorf("/admin/secret recursive olarak bulunmaliydi: %v", found)
+		t.Errorf("/admin/secret should have been found recursively: %v", found)
 	}
 }
 
@@ -236,15 +236,15 @@ func TestExtractSecrets(t *testing.T) {
 	for _, s := range got {
 		types[s.Type] = true
 	}
-	for _, beklenen := range []string{"jwt", "aws-access-key", "generic-secret"} {
-		if !types[beklenen] {
-			t.Errorf("secret tipi bulunamadi: %s (cikan: %+v)", beklenen, got)
+	for _, expected := range []string{"jwt", "aws-access-key", "generic-secret"} {
+		if !types[expected] {
+			t.Errorf("secret type not found: %s (got: %+v)", expected, got)
 		}
 	}
 }
 
 func TestBodyDedup(t *testing.T) {
-	ayni := `<html>AYNI ICERIK</html>`
+	same := `<html>SAME CONTENT</html>`
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -252,7 +252,7 @@ func TestBodyDedup(t *testing.T) {
 		case "/":
 			_, _ = w.Write([]byte(`<html><a href="/a">a</a><a href="/b">b</a></html>`))
 		case "/a", "/b":
-			_, _ = w.Write([]byte(ayni))
+			_, _ = w.Write([]byte(same))
 		default:
 			http.NotFound(w, r)
 		}
@@ -266,7 +266,7 @@ func TestBodyDedup(t *testing.T) {
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
 	if len(rep.Duplicates) == 0 {
-		t.Errorf("/a ve /b ayni govdeye sahip -> en az 1 duplicate beklenirdi")
+		t.Errorf("/a and /b share the same body -> at least 1 duplicate expected")
 	}
 }
 
@@ -276,11 +276,11 @@ func TestDepthLimit(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		switch r.URL.Path {
 		case "/":
-			_, _ = w.Write([]byte(`<html><a href="/seviye1">1</a></html>`))
-		case "/seviye1":
-			_, _ = w.Write([]byte(`<html><a href="/seviye2">2</a></html>`))
-		case "/seviye2":
-			_, _ = w.Write([]byte(`<html>derin</html>`))
+			_, _ = w.Write([]byte(`<html><a href="/level1">1</a></html>`))
+		case "/level1":
+			_, _ = w.Write([]byte(`<html><a href="/level2">2</a></html>`))
+		case "/level2":
+			_, _ = w.Write([]byte(`<html>deep</html>`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -294,70 +294,68 @@ func TestDepthLimit(t *testing.T) {
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
 	for _, p := range rep.Pages {
-		if strings.HasSuffix(p.URL, "/seviye2") {
-			t.Errorf("depth=1 iken /seviye2 (derinlik 2) gezilmemeliydi")
+		if strings.HasSuffix(p.URL, "/level2") {
+			t.Errorf("with depth=1, /level2 (depth 2) should not have been crawled")
 		}
 	}
 
 	var s1 bool
 	for _, p := range rep.Pages {
-		if strings.HasSuffix(p.URL, "/seviye1") {
+		if strings.HasSuffix(p.URL, "/level1") {
 			s1 = true
 		}
 	}
 	if !s1 {
-		t.Errorf("depth=1 iken /seviye1 gezilmeliydi")
+		t.Errorf("with depth=1, /level1 should have been crawled")
 	}
 }
 
 func TestRateManagerPerHost(t *testing.T) {
-
 	g := newRateManager(5, false)
 	if g.forHost("a.com") != g.forHost("b.com") {
-		t.Errorf("global modda tum host'lar ayni limiter'i paylasmali")
+		t.Errorf("in global mode all hosts should share the same limiter")
 	}
 
 	p := newRateManager(5, true)
 	if p.forHost("a.com") != p.forHost("a.com") {
-		t.Errorf("ayni host ayni limiter'i vermeli")
+		t.Errorf("the same host should return the same limiter")
 	}
 	if p.forHost("a.com") == p.forHost("b.com") {
-		t.Errorf("farkli host'lar farkli limiter almali")
+		t.Errorf("different hosts should get different limiters")
 	}
 }
 
 func TestExtractFlags(t *testing.T) {
 	re := flagRegex("HTB")
-	body := []byte(`sayfada HTB{ilk_flag_123} var, tekrar HTB{ilk_flag_123},
-		bir de HTB{ikinci-flag} ve alakasiz FLAG{bu_olmaz} plus HTB{} bos.`)
+	body := []byte(`on the page HTB{first_flag_123} appears, again HTB{first_flag_123},
+		and also HTB{second-flag} and unrelated FLAG{not_this} plus HTB{} empty.`)
 	got := extractFlags(body, re)
 	set := map[string]bool{}
 	for _, f := range got {
 		set[f] = true
 	}
-	if !set["HTB{ilk_flag_123}"] || !set["HTB{ikinci-flag}"] {
-		t.Errorf("beklenen flag'ler bulunamadi: %v", got)
+	if !set["HTB{first_flag_123}"] || !set["HTB{second-flag}"] {
+		t.Errorf("expected flags not found: %v", got)
 	}
-	if set["FLAG{bu_olmaz}"] {
-		t.Errorf("HTB disi format alinmamaliydi: %v", got)
+	if set["FLAG{not_this}"] {
+		t.Errorf("non-HTB format should not have been extracted: %v", got)
 	}
-
 	if set["HTB{}"] {
-		t.Errorf("bos flag alinmamaliydi")
+		t.Errorf("empty flag should not have been extracted")
 	}
 
-	say := 0
+	count := 0
 	for _, f := range got {
-		if f == "HTB{ilk_flag_123}" {
-			say++
+		if f == "HTB{first_flag_123}" {
+			count++
 		}
 	}
-	if say != 1 {
-		t.Errorf("tekrar eden flag tekillestirilmeliydi, adet: %d", say)
+	if count != 1 {
+		t.Errorf("a repeated flag should have been deduplicated, count: %d", count)
 	}
 
 	if extractFlags(body, nil) != nil {
-		t.Errorf("flagRe nil iken flag aranmamali")
+		t.Errorf("no flag should be searched when flagRe is nil")
 	}
 }
 
@@ -367,9 +365,9 @@ func TestFlagInCrawl(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		switch r.URL.Path {
 		case "/":
-			_, _ = w.Write([]byte(`<html><!-- HTB{yorumdaki_flag} --><a href="/gizli">g</a></html>`))
-		case "/gizli":
-			_, _ = w.Write([]byte(`<html>tebrikler: HTB{sayfa_govdesindeki_flag}</html>`))
+			_, _ = w.Write([]byte(`<html><!-- HTB{flag_in_comment} --><a href="/hidden">g</a></html>`))
+		case "/hidden":
+			_, _ = w.Write([]byte(`<html>congrats: HTB{flag_in_body}</html>`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -386,11 +384,11 @@ func TestFlagInCrawl(t *testing.T) {
 	for _, f := range rep.Flags {
 		set[f.Flag] = true
 	}
-	if !set["HTB{yorumdaki_flag}"] {
-		t.Errorf("yorumdaki flag bulunmaliydi: %v", rep.Flags)
+	if !set["HTB{flag_in_comment}"] {
+		t.Errorf("the flag in the comment should have been found: %v", rep.Flags)
 	}
-	if !set["HTB{sayfa_govdesindeki_flag}"] {
-		t.Errorf("sayfa govdesindeki flag bulunmaliydi: %v", rep.Flags)
+	if !set["HTB{flag_in_body}"] {
+		t.Errorf("the flag in the page body should have been found: %v", rep.Flags)
 	}
 }
 
@@ -402,11 +400,10 @@ func TestRobotsAsTargets(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html>link yok</html>`))
+		_, _ = w.Write([]byte(`<html>no links</html>`))
 	})
 	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-
 		_, _ = w.Write([]byte("User-agent: *\nDisallow: /admin/*\nDisallow: /secret-backup\n"))
 	})
 	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
@@ -423,28 +420,28 @@ func TestRobotsAsTargets(t *testing.T) {
 	rep := crawl(context.Background(), client, rm, srv.URL, cfg, nil)
 
 	if rep.Robots == nil || !rep.Robots.Found {
-		t.Fatalf("robots.txt bulunup raporlanmaliydi")
+		t.Fatalf("robots.txt should have been found and reported")
 	}
 
-	durum := map[string]int{}
+	status := map[string]int{}
 	for _, p := range rep.Robots.Paths {
-		durum[p.Path] = p.Status
+		status[p.Path] = p.Status
 	}
-	if durum[srv.URL+"/admin/"] != 200 {
-		t.Errorf("/admin/ (wildcard prefix) hedef olarak 200 gezilmeliydi: %+v", rep.Robots.Paths)
+	if status[srv.URL+"/admin/"] != 200 {
+		t.Errorf("/admin/ (wildcard prefix) should have been crawled as a target with 200: %+v", rep.Robots.Paths)
 	}
-	if durum[srv.URL+"/secret-backup"] != 403 {
-		t.Errorf("/secret-backup robots'tan hedef alinip 403 raporlanmaliydi: %+v", rep.Robots.Paths)
+	if status[srv.URL+"/secret-backup"] != 403 {
+		t.Errorf("/secret-backup should have been targeted from robots and reported as 403: %+v", rep.Robots.Paths)
 	}
 
-	var adminGezildi bool
+	var adminCrawled bool
 	for _, p := range rep.Pages {
 		if strings.HasSuffix(p.URL, "/admin/") {
-			adminGezildi = true
+			adminCrawled = true
 		}
 	}
-	if !adminGezildi {
-		t.Errorf("/admin/ frontier'a alinip gezilmeliydi (robots bypass)")
+	if !adminCrawled {
+		t.Errorf("/admin/ should have been queued and crawled (robots bypass)")
 	}
 }
 
@@ -452,10 +449,10 @@ func TestNormalizeDeepBase(t *testing.T) {
 	base, _ := url.Parse("https://t.com/docs/guide/")
 	got, ok := normalize(base, "chapter2.html")
 	if !ok || got != "https://t.com/docs/guide/chapter2.html" {
-		t.Errorf("goreli cozum yanlis: got=%q ok=%v", got, ok)
+		t.Errorf("relative resolution wrong: got=%q ok=%v", got, ok)
 	}
-	got2, ok2 := normalize(base, "../ust")
-	if !ok2 || got2 != "https://t.com/docs/ust" {
-		t.Errorf("bir ust dizin cozumu yanlis: got=%q", got2)
+	got2, ok2 := normalize(base, "../parent")
+	if !ok2 || got2 != "https://t.com/docs/parent" {
+		t.Errorf("parent-directory resolution wrong: got=%q", got2)
 	}
 }

@@ -15,16 +15,16 @@ import (
 	"time"
 )
 
-type kesif struct {
+type discovery struct {
 	url    string
-	kaynak string
+	source string
 }
 
 var sitemapLocRe = regexp.MustCompile(`(?i)<loc>\s*([^<\s]+)\s*</loc>`)
 
-func scanRobotsSitemap(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, seedURL *url.URL) ([]kesif, *RobotsInfo) {
+func scanRobotsSitemap(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, seedURL *url.URL) ([]discovery, *RobotsInfo) {
 	origin := seedURL.Scheme + "://" + seedURL.Host
-	var sonuc []kesif
+	var results []discovery
 	info := &RobotsInfo{URL: origin + "/robots.txt"}
 
 	if res, err := fetch(ctx, client, rm, cfg, origin+"/robots.txt"); err == nil && res.StatusCode == 200 {
@@ -32,101 +32,101 @@ func scanRobotsSitemap(ctx context.Context, client *http.Client, rm *rateManager
 
 		raw := string(res.Body)
 		if len(raw) > 8192 {
-			raw = raw[:8192] + "\n...(kirpildi)"
+			raw = raw[:8192] + "\n...(truncated)"
 		}
 		info.Raw = raw
 
 		disallow, allow, sitemaps := parseRobots(string(res.Body))
 		for _, p := range disallow {
 			if abs, ok := toAbsolute(origin, p); ok {
-				sonuc = append(sonuc, kesif{url: abs, kaynak: "robots-disallow"})
+				results = append(results, discovery{url: abs, source: "robots-disallow"})
 			}
 		}
 
 		for _, p := range allow {
 			if abs, ok := toAbsolute(origin, p); ok {
-				sonuc = append(sonuc, kesif{url: abs, kaynak: "robots-allow"})
+				results = append(results, discovery{url: abs, source: "robots-allow"})
 			}
 		}
 		info.Sitemaps = sitemaps
 
 		for _, sm := range sitemaps {
-			sonuc = append(sonuc, scanSitemap(ctx, client, rm, cfg, sm)...)
+			results = append(results, scanSitemap(ctx, client, rm, cfg, sm)...)
 		}
 	}
 
-	sonuc = append(sonuc, scanSitemap(ctx, client, rm, cfg, origin+"/sitemap.xml")...)
+	results = append(results, scanSitemap(ctx, client, rm, cfg, origin+"/sitemap.xml")...)
 
-	return sonuc, info
+	return results, info
 }
 
-func scanSitemap(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, sitemapURL string) []kesif {
+func scanSitemap(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, sitemapURL string) []discovery {
 	res, err := fetch(ctx, client, rm, cfg, sitemapURL)
 	if err != nil || res.StatusCode != 200 {
 		return nil
 	}
-	var sonuc []kesif
+	var results []discovery
 	for _, m := range sitemapLocRe.FindAllStringSubmatch(string(res.Body), -1) {
 		loc := strings.TrimSpace(m[1])
 		if loc != "" {
-			sonuc = append(sonuc, kesif{url: loc, kaynak: "sitemap"})
+			results = append(results, discovery{url: loc, source: "sitemap"})
 		}
 	}
-	return sonuc
+	return results
 }
 
 func parseRobots(body string) (disallow []string, allow []string, sitemaps []string) {
-	for _, satir := range strings.Split(body, "\n") {
-		satir = strings.TrimSpace(satir)
-		if satir == "" || strings.HasPrefix(satir, "#") {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		anahtar, deger, ok := strings.Cut(satir, ":")
+		key, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}
-		anahtar = strings.ToLower(strings.TrimSpace(anahtar))
-		deger = strings.TrimSpace(deger)
-		switch anahtar {
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch key {
 		case "disallow":
 
-			if p := cleanRobotsPath(deger); p != "" {
+			if p := cleanRobotsPath(value); p != "" {
 				disallow = append(disallow, p)
 			}
 		case "allow":
-			if p := cleanRobotsPath(deger); p != "" {
+			if p := cleanRobotsPath(value); p != "" {
 				allow = append(allow, p)
 			}
 		case "sitemap":
-			if deger != "" {
-				sitemaps = append(sitemaps, deger)
+			if value != "" {
+				sitemaps = append(sitemaps, value)
 			}
 		}
 	}
 	return disallow, allow, sitemaps
 }
 
-func cleanRobotsPath(deger string) string {
-	deger = strings.TrimSpace(deger)
-	if i := strings.IndexByte(deger, '*'); i >= 0 {
-		deger = deger[:i]
+func cleanRobotsPath(value string) string {
+	value = strings.TrimSpace(value)
+	if i := strings.IndexByte(value, '*'); i >= 0 {
+		value = value[:i]
 	}
-	deger = strings.TrimSuffix(deger, "$")
-	deger = strings.TrimSpace(deger)
-	if deger == "" || deger == "/" {
+	value = strings.TrimSuffix(value, "$")
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
 		return ""
 	}
-	return deger
+	return value
 }
 
-func loadWordlist(dosya string) ([]string, error) {
-	f, err := os.Open(dosya)
+func loadWordlist(filename string) ([]string, error) {
+	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var kelimeler []string
+	var words []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -134,12 +134,12 @@ func loadWordlist(dosya string) ([]string, error) {
 		if k == "" || strings.HasPrefix(k, "#") {
 			continue
 		}
-		kelimeler = append(kelimeler, k)
+		words = append(words, k)
 	}
-	return kelimeler, sc.Err()
+	return words, sc.Err()
 }
 
-func bruteForce(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, seedURL *url.URL, kelimeler []string) []BruteResult {
+func bruteForce(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, seedURL *url.URL, words []string) []BruteResult {
 	origin := seedURL.Scheme + "://" + seedURL.Host
 
 	softStatus, softLen, softVar := soft404Baseline(ctx, client, rm, cfg, origin)
@@ -155,14 +155,14 @@ func bruteForce(ctx context.Context, client *http.Client, rm *rateManager, cfg *
 	seenURL := make(map[string]struct{})
 	seenBase := map[string]struct{}{"": {}}
 	bases := []string{""}
-	var bulunan []BruteResult
+	var results []BruteResult
 
 	for depth := 0; depth <= maxDepth && len(bases) > 0; depth++ {
-		cands := bruteCandidates(origin, bases, kelimeler, cfg.Extensions)
+		cands := bruteCandidates(origin, bases, words, cfg.Extensions)
 		found := bruteFetch(ctx, client, rm, cfg, cands, softStatus, softLen, softVar, seenURL)
 		var nextBases []string
 		for _, br := range found {
-			bulunan = append(bulunan, br)
+			results = append(results, br)
 			if cfg.BruteRecursive && depth < maxDepth && looksLikeDir(br) {
 				if u, err := url.Parse(br.URL); err == nil {
 					b := strings.TrimRight(u.Path, "/")
@@ -175,14 +175,14 @@ func bruteForce(ctx context.Context, client *http.Client, rm *rateManager, cfg *
 		}
 		bases = nextBases
 	}
-	return bulunan
+	return results
 }
 
-func bruteCandidates(origin string, bases, kelimeler, exts []string) []string {
+func bruteCandidates(origin string, bases, words, exts []string) []string {
 	var cands []string
 	for _, base := range bases {
 		base = strings.TrimRight(base, "/")
-		for _, k := range kelimeler {
+		for _, k := range words {
 			k = strings.Trim(strings.TrimSpace(k), "/")
 			if k == "" {
 				continue
@@ -203,7 +203,7 @@ func bruteCandidates(origin string, bases, kelimeler, exts []string) []string {
 func bruteFetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, cands []string, softStatus, softLen int, softVar bool, seenURL map[string]struct{}) []BruteResult {
 	jobs := make(chan string)
 	var mu sync.Mutex
-	var bulunan []BruteResult
+	var results []BruteResult
 
 	var wg sync.WaitGroup
 	for i := 0; i < cfg.Workers; i++ {
@@ -219,7 +219,7 @@ func bruteFetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *
 					continue
 				}
 				mu.Lock()
-				bulunan = append(bulunan, BruteResult{URL: u, Status: res.StatusCode})
+				results = append(results, BruteResult{URL: u, Status: res.StatusCode})
 				mu.Unlock()
 			}
 		}()
@@ -228,12 +228,12 @@ func bruteFetch(ctx context.Context, client *http.Client, rm *rateManager, cfg *
 feed:
 	for _, u := range cands {
 		mu.Lock()
-		_, gorildi := seenURL[u]
-		if !gorildi {
+		_, seen := seenURL[u]
+		if !seen {
 			seenURL[u] = struct{}{}
 		}
 		mu.Unlock()
-		if gorildi {
+		if seen {
 			continue
 		}
 		select {
@@ -244,7 +244,7 @@ feed:
 	}
 	close(jobs)
 	wg.Wait()
-	return bulunan
+	return results
 }
 
 func looksLikeDir(br BruteResult) bool {
@@ -279,8 +279,8 @@ func soft404Baseline(ctx context.Context, client *http.Client, rm *rateManager, 
 }
 
 func probe404(ctx context.Context, client *http.Client, rm *rateManager, cfg *Config, origin string) *FetchResult {
-	yol := fmt.Sprintf("/zakspider-yok-%d-%d", time.Now().UnixNano(), rand.Intn(1_000_000))
-	res, err := fetch(ctx, client, rm, cfg, origin+yol)
+	urlPath := fmt.Sprintf("/zakspider-notfound-%d-%d", time.Now().UnixNano(), rand.Intn(1_000_000))
+	res, err := fetch(ctx, client, rm, cfg, origin+urlPath)
 	if err != nil {
 		return nil
 	}

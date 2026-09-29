@@ -97,13 +97,13 @@ func parseForm(n *html.Node) Form {
 			}
 			f.Inputs = append(f.Inputs, in)
 
-			ad := strings.ToLower(in.Name)
-			if strings.Contains(ad, "csrf") || strings.Contains(ad, "token") ||
-				strings.Contains(ad, "authenticity") || strings.Contains(ad, "nonce") ||
-				strings.Contains(ad, "_xsrf") {
+			name := strings.ToLower(in.Name)
+			if strings.Contains(name, "csrf") || strings.Contains(name, "token") ||
+				strings.Contains(name, "authenticity") || strings.Contains(name, "nonce") ||
+				strings.Contains(name, "_xsrf") {
 				f.HasCSRF = true
 			}
-			if strings.ToLower(in.Type) == "password" || strings.Contains(ad, "password") || strings.Contains(ad, "passwd") {
+			if strings.ToLower(in.Type) == "password" || strings.Contains(name, "password") || strings.Contains(name, "passwd") {
 				f.HasPassword = true
 			}
 		}
@@ -194,9 +194,9 @@ type Secret struct {
 	Match string `json:"match"`
 }
 
-var secretDesenler = []struct {
-	ad string
-	re *regexp.Regexp
+var secretPatterns = []struct {
+	name string
+	re   *regexp.Regexp
 }{
 	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}`)},
 	{"aws-access-key", regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
@@ -246,21 +246,21 @@ func extractSecrets(body []byte) []Secret {
 	s := string(body)
 	var out []Secret
 	seen := make(map[string]struct{})
-	for _, d := range secretDesenler {
+	for _, d := range secretPatterns {
 		for _, m := range d.re.FindAllString(s, -1) {
 			m = truncate(m, 100)
-			anahtar := d.ad + "|" + m
-			if _, ok := seen[anahtar]; ok {
+			key := d.name + "|" + m
+			if _, ok := seen[key]; ok {
 				continue
 			}
-			seen[anahtar] = struct{}{}
-			out = append(out, Secret{Type: d.ad, Match: m})
+			seen[key] = struct{}{}
+			out = append(out, Secret{Type: d.name, Match: m})
 		}
 	}
 	return out
 }
 
-var ilgincDesenler = []string{
+var interestingPatterns = []string{
 	".bak", ".old", ".swp", ".save", ".orig", "~",
 	".git", ".svn", ".env", ".htaccess", ".htpasswd",
 	".sql", ".sqlite", ".db", ".zip", ".tar", ".gz", ".rar",
@@ -275,9 +275,9 @@ func isInteresting(rawURL string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	yol := strings.ToLower(u.Path)
-	for _, d := range ilgincDesenler {
-		if strings.Contains(yol, d) {
+	urlPath := strings.ToLower(u.Path)
+	for _, d := range interestingPatterns {
+		if strings.Contains(urlPath, d) {
 			return d, true
 		}
 	}

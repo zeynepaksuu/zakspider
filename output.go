@@ -162,11 +162,11 @@ func printTextReport(w io.Writer, r *Report) {
 		fmt.Fprintf(w, "\n%s robots.txt found -> crawling its paths as targets (bypassed): %s\n",
 			colorRed("[!]"), colorGray("%s", r.Robots.URL))
 		for _, p := range r.Robots.Paths {
-			durum := "not reached"
+			status := "not reached"
 			if p.Status > 0 {
-				durum = colorStatus(p.Status)
+				status = colorStatus(p.Status)
 			}
-			fmt.Fprintf(w, "    [%s] %-9s %s\n", durum, "("+p.Source+")", p.Path)
+			fmt.Fprintf(w, "    [%s] %-9s %s\n", status, "("+p.Source+")", p.Path)
 		}
 		if len(r.Robots.Sitemaps) > 0 {
 			fmt.Fprintf(w, "    %s\n", colorGray("sitemaps: %v", r.Robots.Sitemaps))
@@ -223,11 +223,11 @@ func printTextReport(w io.Writer, r *Report) {
 	if len(r.Comments) > 0 {
 		fmt.Fprintf(w, "\n%s HTML comments: %d\n", colorCyan("[!]"), len(r.Comments))
 		for _, c := range r.Comments {
-			y := c.Comment
-			if len(y) > 120 {
-				y = y[:120] + "..."
+			text := c.Comment
+			if len(text) > 120 {
+				text = text[:120] + "..."
 			}
-			fmt.Fprintf(w, "    <!-- %s -->\n      %s\n", y, colorGray("source: %s", c.URL))
+			fmt.Fprintf(w, "    <!-- %s -->\n      %s\n", text, colorGray("source: %s", c.URL))
 		}
 	}
 

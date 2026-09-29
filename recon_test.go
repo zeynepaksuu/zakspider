@@ -9,7 +9,7 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
 	if err != nil {
-		t.Fatalf("gecersiz test url: %s", raw)
+		t.Fatalf("invalid test url: %s", raw)
 	}
 	return u
 }
@@ -29,34 +29,34 @@ func TestExtractJSEndpoints(t *testing.T) {
 		set[g] = true
 	}
 
-	beklenen := []string{
+	expected := []string{
 		"/api/v1/users",
 		"/admin/login",
 		"/api/orders/123",
 		"https://internal.target.com/secret",
 	}
-	for _, b := range beklenen {
+	for _, b := range expected {
 		if !set[b] {
-			t.Errorf("beklenen endpoint bulunamadi: %q (cikan: %v)", b, got)
+			t.Errorf("expected endpoint not found: %q (got: %v)", b, got)
 		}
 	}
 
 	if set["/"] {
-		t.Errorf("tek slash '/' alinmamaliydi ama alindi")
+		t.Errorf("a lone slash '/' should not have been extracted but was")
 	}
 }
 
 func TestIsInteresting(t *testing.T) {
-	ilginc := []string{
+	interesting := []string{
 		"https://x.com/backup.zip",
 		"https://x.com/.git/config",
 		"https://x.com/config.bak",
 		"https://x.com/.env",
 		"https://x.com/robots.txt",
 	}
-	for _, u := range ilginc {
+	for _, u := range interesting {
 		if _, ok := isInteresting(u); !ok {
-			t.Errorf("ilginc olmaliydi ama degil: %s", u)
+			t.Errorf("should have been interesting but was not: %s", u)
 		}
 	}
 
@@ -66,8 +66,8 @@ func TestIsInteresting(t *testing.T) {
 		"https://x.com/images/logo.png",
 	}
 	for _, u := range normal {
-		if sebep, ok := isInteresting(u); ok {
-			t.Errorf("normal olmaliydi ama ilginc isaretlendi: %s (sebep: %s)", u, sebep)
+		if reason, ok := isInteresting(u); ok {
+			t.Errorf("should have been normal but was flagged interesting: %s (reason: %s)", u, reason)
 		}
 	}
 }
@@ -75,25 +75,25 @@ func TestIsInteresting(t *testing.T) {
 func TestNormalize(t *testing.T) {
 	base := mustURL(t, "https://target.com/dir/page")
 
-	testler := []struct {
-		ham      string
-		beklenen string
-		gecerli  bool
+	cases := []struct {
+		raw      string
+		expected string
+		valid    bool
 	}{
 		{"/admin", "https://target.com/admin", true},
 		{"../x", "https://target.com/x", true},
-		{"#bolum", "", false},
+		{"#section", "", false},
 		{"mailto:a@b.com", "", false},
 		{"https://target.com:443/y", "https://target.com/y", true},
 	}
-	for _, tc := range testler {
-		got, ok := normalize(base, tc.ham)
-		if ok != tc.gecerli {
-			t.Errorf("normalize(%q) gecerli=%v, beklenen=%v", tc.ham, ok, tc.gecerli)
+	for _, tc := range cases {
+		got, ok := normalize(base, tc.raw)
+		if ok != tc.valid {
+			t.Errorf("normalize(%q) valid=%v, expected=%v", tc.raw, ok, tc.valid)
 			continue
 		}
-		if ok && got != tc.beklenen {
-			t.Errorf("normalize(%q) = %q, beklenen %q", tc.ham, got, tc.beklenen)
+		if ok && got != tc.expected {
+			t.Errorf("normalize(%q) = %q, expected %q", tc.raw, got, tc.expected)
 		}
 	}
 }
