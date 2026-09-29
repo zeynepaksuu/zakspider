@@ -1,0 +1,32 @@
+# Derlenmis binary
+spider
+spider.exe
+zakspider
+zakspider.exe
+*.exe
+
+# Release binary'leri (GitHub Releases'e elle yuklenir, repoya girmez)
+/dist/
+
+# Test / coverage ciktilari
+*.out
+coverage.*
+*.test
+
+# Go calisma dosyalari
+/vendor/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Gecici
+*.log
+scratchpad/
+rapor.json
